@@ -73,6 +73,15 @@ fn place(conn: &RustConnection, xid: u32, g: (i32, i32, u32, u32)) {
     let _ = conn.flush();
 }
 
+// True when no window has focus (this is the state while the GNOME Activities overview is open).
+fn no_active_window(conn: &RustConnection, root: u32, atom: u32) -> bool {
+    conn.get_property(false, root, atom, AtomEnum::WINDOW, 0, 1)
+        .ok()
+        .and_then(|c| c.reply().ok())
+        .map(|r| r.value32().and_then(|mut it| it.next()).unwrap_or(0) == 0)
+        .unwrap_or(false)
+}
+
 fn spin(label: &str, min: f64, max: f64, val: f64, row: &GBox, f: impl Fn(f64) + 'static) {
     row.append(&Label::builder().label(label).xalign(0.0).build());
     let s = SpinButton::with_range(min, max, 1.0);
@@ -83,7 +92,6 @@ fn spin(label: &str, min: f64, max: f64, val: f64, row: &GBox, f: impl Fn(f64) +
 }
 
 // One click-through, window-manager-bypassing overlay for a single monitor.
-// `g` is the monitor rectangle in physical X pixels (x, y, w, h).
 fn make_overlay(
     conn: Rc<RustConnection>,
     tail: Rc<RefCell<Tail>>,
@@ -122,8 +130,6 @@ fn make_overlay(
         .build();
     win.add_css_class("tail-overlay");
 
-    // Realize (creates the X window without showing it) so override-redirect and the exact
-    // geometry are set BEFORE it is mapped. No unmap/remap tricks.
     gtk4::prelude::WidgetExt::realize(&win);
     let mut xid = 0u32;
     if let Some(surf) = win.surface() {
@@ -138,7 +144,6 @@ fn make_overlay(
         }
     }
 
-    // GTK may resize the window when it maps; re-apply the exact monitor rectangle afterwards.
     if xid != 0 {
         let conn = conn.clone();
         win.connect_map(move |_| {
@@ -158,8 +163,8 @@ fn build(app: &Application) {
     let cfg = Rc::new(Cfg {
         rainbow: Cell::new(true),
         rgb: Cell::new((0.0, 0.6, 1.0)),
-        width: Cell::new(12.0),
-        max_len: Cell::new(2),
+        width: Cell::new(12.0), // default width
+        max_len: Cell::new(2),  // default max length
         taper: Cell::new(true),
     });
 
@@ -269,14 +274,20 @@ fn build(app: &Application) {
         let root = conn.setup().roots[screen].root;
 
         // Hide the system cursor (XFixes); tied to this connection.
+        let mut cursor_hidden = false;
         if conn.xfixes_query_version(4, 0).ok().and_then(|c| c.reply().ok()).is_some() {
             let _ = conn.xfixes_hide_cursor(root);
             let _ = conn.flush();
+            cursor_hidden = true;
         }
+        let active_atom = conn
+            .intern_atom(false, b"_NET_ACTIVE_WINDOW")
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .map(|r| r.atom)
+            .unwrap_or(0);
         let conn = Rc::new(conn);
 
-        // One overlay per monitor, each placed in physical X coordinates, regardless of
-        // which monitor the app was started on.
         let monitors = gdk::Display::default().unwrap().monitors();
         let scale = monitors
             .item(0)
@@ -308,19 +319,30 @@ fn build(app: &Application) {
         let mut tick: u32 = 0;
         let id = glib::timeout_add_local(Duration::from_millis(16), move || {
             tick = tick.wrapping_add(1);
-            // Keep every overlay above all other windows, including newly opened ones.
-            if tick % 8 == 0 {
+            if tick % 6 == 0 {
+                // Keep every overlay above all other windows, including newly opened ones.
                 for &x in &xids {
                     let _ = c2.configure_window(
                         x,
                         &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
                     );
                 }
+                // GNOME's Activities overview can't be drawn over by X11 windows, so while it is
+                // open give the real cursor back, and hide it again afterwards.
+                if active_atom != 0 {
+                    let overview = no_active_window(&c2, root, active_atom);
+                    if overview && cursor_hidden {
+                        let _ = c2.xfixes_show_cursor(root);
+                        cursor_hidden = false;
+                    } else if !overview && !cursor_hidden {
+                        let _ = c2.xfixes_hide_cursor(root);
+                        cursor_hidden = true;
+                    }
+                }
                 let _ = c2.flush();
             }
             let mut t = tail.borrow_mut();
             let mut changed = false;
-            // Root coordinates span all monitors; the same tail is drawn on each overlay.
             if let Some(p) = c2.query_pointer(root).ok().and_then(|c| c.reply().ok()) {
                 let pos = (p.root_x, p.root_y);
                 if pos != t.last {
