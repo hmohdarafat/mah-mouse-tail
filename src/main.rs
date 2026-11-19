@@ -158,8 +158,8 @@ fn build(app: &Application) {
     let cfg = Rc::new(Cfg {
         rainbow: Cell::new(true),
         rgb: Cell::new((0.0, 0.6, 1.0)),
-        width: Cell::new(10.0),
-        max_len: Cell::new(60),
+        width: Cell::new(12.0),
+        max_len: Cell::new(2),
         taper: Cell::new(true),
     });
 
@@ -209,11 +209,11 @@ fn build(app: &Application) {
 
     {
         let cfg = cfg.clone();
-        spin("Width (px)", 1.0, 100.0, 10.0, &root_box, move |v| cfg.width.set(v));
+        spin("Width (px)", 1.0, 100.0, 12.0, &root_box, move |v| cfg.width.set(v));
     }
     {
         let cfg = cfg.clone();
-        spin("Max length (points)", 2.0, 1000.0, 60.0, &root_box, move |v| {
+        spin("Max length (points)", 2.0, 1000.0, 2.0, &root_box, move |v| {
             cfg.max_len.set(v as usize)
         });
     }
