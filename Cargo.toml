@@ -1,0 +1,16 @@
+[package]
+name = "mah-mouse-tail"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+gtk4 = { version = "0.9", features = ["v4_10"] }
+gdk4-x11 = "0.9"
+x11rb = { version = "0.13", features = ["xfixes"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
